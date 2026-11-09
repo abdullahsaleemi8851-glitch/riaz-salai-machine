@@ -1,0 +1,44 @@
+name: Encrypted database backup
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 2 * * *"
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create encrypted public-schema backup
+        id: backup
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          AGE_RECIPIENT: ${{ secrets.AGE_RECIPIENT }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SUPABASE_DB_URL" ] || [ -z "$AGE_RECIPIENT" ]; then
+            echo "Configure SUPABASE_DB_URL and AGE_RECIPIENT in repository Actions secrets." >&2
+            exit 1
+          fi
+          sudo apt-get update
+          sudo apt-get install --yes age
+          backup_file="riaz-salai-public-$(date -u +%Y%m%dT%H%M%SZ).dump.age"
+          docker run --rm \
+            --env SUPABASE_DB_URL \
+            postgres:17-alpine \
+            sh -c 'pg_dump --format=custom --schema=public --no-owner --no-acl "$SUPABASE_DB_URL"' \
+            | age --encrypt --recipient "$AGE_RECIPIENT" > "$backup_file"
+          test -s "$backup_file"
+          echo "file=$backup_file" >> "$GITHUB_OUTPUT"
+
+      - name: Store encrypted backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: riaz-salai-database-backup-${{ github.run_id }}
+          path: ${{ steps.backup.outputs.file }}
+          if-no-files-found: error
+          retention-days: 30
